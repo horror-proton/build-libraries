@@ -1,14 +1,14 @@
 # This is a basic workflow to help you get started with Actions
 
-name: Build Kernel
+name: Build Linux Libraries
 
 # Controls when the action will run. Triggers the workflow on push or pull request
 # events but only for the regression2 branch
 on:
   push:
-    branches: [ flicker-free ]
+    branches: [ master ]
   pull_request:
-    branches: [ flicker-free ]
+    branches: [ master ]
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
@@ -33,12 +33,18 @@ jobs:
           cd ~
           git clone https://github.com/opencv/opencv.git -b 4.5.3 --depth=1
 
+      - name: Setup ccache
+        uses: Chocobo1/setup-ccache-action@v1
+        with:
+          remove_stale_cache: false
+
       - name: Build OpenCV
         run: |
-            cd opencv
+            cd ~/opencv
             mkdir build && cd build
             cmake \
               -DCMAKE_BUILD_TYPE=RELEASE \
+              -DENABLE_CCACHE=ON \
               -DBUILD_SHARED_LIBS=ON \
               -DWITH_IPP=OFF \
               -DBUILD_IPP_IW=OFF \
@@ -54,6 +60,7 @@ jobs:
               -DWITH_TIFF=ON \
               -DBUILD_TIFF=ON \
               -DBUILD_TESTS=OFF \
+              -DBUILD_PERF_TESTS=OFF \
               -DBUILD_EXAMPLES=OFF \
               -DWITH_FFMPEG=OFF \
               -DCMAKE_INSTALL_PREFIX=~/opencv4 \
@@ -64,15 +71,16 @@ jobs:
 
       - name: Patch OpenCV
         run: |
+            mkdir ~/build
             cd ~/opencv4/lib
             REAL_OPENCV=$(realpath libopencv_world.so)
             patchelf --set-soname libopencv_world.so ${REAL_OPENCV}
+            patchelf --set-rpath '$ORIGIN/../3rdparty/lib:$ORIGIN/lib:$ORIGIN' ${REAL_OPENCV}
             cp ${REAL_OPENCV} ~/build/libopencv_world.so
 
       - name: Package OpenCV
         run: |
             cd ~
-            mkdir build
             tar -czvf build/OpenCV.tar.gz opencv4
 
       - name: Clone FastDeploy
@@ -95,19 +103,21 @@ jobs:
 
       - name: Patch FastDeploy
         run: |
-            cd ~/compiled_fastdeploy_sdk/lib
+            cd ~/FastDeploy/build
             REAL_FASTDEPLOY=$(realpath libfastdeploy.so)
             patchelf --set-soname libfastdeploy.so ${REAL_FASTDEPLOY}
-            cp ${REAL_FASTDEPLOY} ~/build/libfastdeploy.so
+            ldd libfastdeploy.so
             libs=$(ldd libfastdeploy.so | grep FastDeploy | sed 's/.*=> \(.*\) (.*)/\1/g')
             for lib in $libs
             do
               cp $lib ~/build/;
             done
+            patchelf --set-rpath '$ORIGIN/../3rdparty/lib:$ORIGIN/lib:$ORIGIN' ${REAL_FASTDEPLOY}
+            cp ${REAL_FASTDEPLOY} ~/build/libfastdeploy.so
 
       - name: Upload Libs
         uses: actions/upload-artifact@v3
         with:
-          name: Librarys
+          name: Libraries
           path: ~/build
 
