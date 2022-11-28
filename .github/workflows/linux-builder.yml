@@ -9,6 +9,12 @@ on:
     branches: [ master ]
   pull_request:
     branches: [ master ]
+  workflow_dispatch:
+
+env:
+  OPENCV_REF: 4.5.3
+  FASTDEPLOY_VER: 1.0.0
+  FASTDEPLOY_REF: release/1.0.0
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
@@ -20,7 +26,7 @@ jobs:
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       # Runs a single command using the runners shell
       - name: Install Packages
@@ -31,7 +37,7 @@ jobs:
       - name: Clone OpenCV
         run: |
           cd ~
-          git clone https://github.com/opencv/opencv.git -b 4.5.3 --depth=1
+          git clone https://github.com/opencv/opencv.git -b ${{ env.OPENCV_REF }} --depth=1
 
       - name: Setup ccache
         uses: Chocobo1/setup-ccache-action@v1
@@ -43,9 +49,9 @@ jobs:
             cd ~/opencv
             mkdir build && cd build
             cmake \
-              -DCMAKE_BUILD_TYPE=RELEASE \
+              -DCMAKE_BUILD_TYPE=Release \
               -DENABLE_CCACHE=ON \
-              -DBUILD_SHARED_LIBS=ON \
+              -DBUILD_SHARED_LIBS=OFF \
               -DWITH_IPP=OFF \
               -DBUILD_IPP_IW=OFF \
               -DWITH_LAPACK=OFF \
@@ -64,60 +70,43 @@ jobs:
               -DBUILD_EXAMPLES=OFF \
               -DWITH_FFMPEG=OFF \
               -DCMAKE_INSTALL_PREFIX=~/opencv4 \
-              -DBUILD_opencv_world=ON \
+              -DBUILD_opencv_world=OFF \
               ..
             make -j$(nproc --all)
             make install
 
-      - name: Patch OpenCV
-        run: |
-            mkdir ~/build
-            cd ~/opencv4/lib
-            REAL_OPENCV=$(realpath libopencv_world.so)
-            patchelf --set-soname libopencv_world.so ${REAL_OPENCV}
-            patchelf --set-rpath '$ORIGIN/../3rdparty/lib:$ORIGIN/lib:$ORIGIN' ${REAL_OPENCV}
-            cp ${REAL_OPENCV} ~/build/libopencv_world.so
-
       - name: Package OpenCV
         run: |
-            cd ~
-            tar -czvf build/OpenCV.tar.gz opencv4
+            cd ~/opencv4
+            mkdir -p $GITHUB_WORKSPACE/release
+            tar -czvf $GITHUB_WORKSPACE/release/opencv-${{ env.OPENCV_REF }}.tar.gz .
 
       - name: Clone FastDeploy
         run: |
             cd ~
-            git clone https://github.com/PaddlePaddle/FastDeploy.git -b release/1.0.0 --depth=1
+            git clone https://github.com/PaddlePaddle/FastDeploy.git -b ${{ env.FASTDEPLOY_REF }} --depth=1
 
       - name: Build FastDeploy
         run: |
             cd ~/FastDeploy
             mkdir build && cd build
-            cmake \
+            cmake .. \
               -DENABLE_ORT_BACKEND=ON \
               -DCMAKE_INSTALL_PREFIX=~/compiled_fastdeploy_sdk \
               -DENABLE_VISION=ON \
-              -DOPENCV_DIRECTORY=~/opencv4/lib/cmake/opencv4/ \
-              ..
+              -DOPENCV_DIRECTORY=~/opencv4/lib/cmake/opencv4/ # \
+              # -DCMAKE_INSTALL_RPATH='$ORIGIN/../3rdparty/lib/:$ORIGIN/lib/:$ORIGIN/'
             make -j$(nproc --all)
             make install
 
-      - name: Patch FastDeploy
+      - name: Pack FastDeploy
         run: |
-            cd ~/FastDeploy/build
-            REAL_FASTDEPLOY=$(realpath libfastdeploy.so)
-            patchelf --set-soname libfastdeploy.so ${REAL_FASTDEPLOY}
-            ldd libfastdeploy.so
-            libs=$(ldd libfastdeploy.so | grep FastDeploy | sed 's/.*=> \(.*\) (.*)/\1/g')
-            for lib in $libs
-            do
-              cp $lib ~/build/;
-            done
-            patchelf --set-rpath '$ORIGIN/../3rdparty/lib:$ORIGIN/lib:$ORIGIN' ${REAL_FASTDEPLOY}
-            cp ${REAL_FASTDEPLOY} ~/build/libfastdeploy.so
+          cd ~/compiled_fastdeploy_sdk
+          mkdir -p $GITHUB_WORKSPACE/release
+          tar -czvf $GITHUB_WORKSPACE/release/fastdeploy-${{ env.FASTDEPLOY_VER }}.tar.gz .
 
-      - name: Upload Libs
-        uses: actions/upload-artifact@v3
+      - uses: softprops/action-gh-release@v1
         with:
-          name: Libraries
-          path: ~/build
-
+          tag_name: latest
+          files: |
+            release/*
