@@ -1,0 +1,124 @@
+# This is a basic workflow to help you get started with Actions
+
+name: Build Windows Libraries
+
+# Controls when the action will run. Triggers the workflow on push or pull request
+# events but only for the regression2 branch
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+env:
+  OPENCV_REF: 4.5.3
+  FASTDEPLOY_VER: 1.0.0
+  FASTDEPLOY_REF: release/1.0.0
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on: windows-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v3
+
+      - name: Add MSVC to PATH
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Setup ccache
+        uses: Chocobo1/setup-ccache-action@v1
+        with:
+          windows_compile_environment: msvc
+
+      - name: Clone OpenCV
+        run: |
+          cd ${{ github.workspace }}
+          git clone https://github.com/opencv/opencv.git -b ${{ env.OPENCV_REF }} --depth=1
+
+      - name: Build OpenCV
+        run: |
+            cd ${{ github.workspace }}\opencv
+            mkdir build && cd build
+            cmd "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat"
+            cmake -G Ninja `
+              -DCMAKE_CXX_COMPILER=cl `
+              -DCMAKE_C_COMPILER=cl `
+              -DCMAKE_BUILD_TYPE=RELEASE `
+              -DENABLE_CCACHE=ON `
+              -DBUILD_SHARED_LIBS=OFF `
+              -DWITH_IPP=OFF `
+              -DWITH_LAPACK=OFF `
+              -DWITH_EIGEN=OFF `
+              -DWITH_JPEG=ON `
+              -DWITH_PNG=ON `
+              -DWITH_PROTOBUF=OFF `
+              -DWITH_TIFF=ON `
+              -DBUILD_TESTS=OFF `
+              -DBUILD_JAVA=OFF `
+              -DBUILD_PERF_TESTS=OFF `
+              -DBUILD_EXAMPLES=OFF `
+              -DWITH_FFMPEG=OFF `
+              -DOPENCV_FORCE_3RDPARTY_BUILD=ON `
+              -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}\opencv4 `
+              -DBUILD_opencv_world=OFF `
+              ..
+            cmake --build . --target install --parallel $PARALLEL_JOBS
+
+      - name: Package OpenCV
+        run: |
+            cd ${{ github.workspace }}
+            mkdir build
+            tar -czvf build\OpenCV.tar.gz opencv4
+
+      - name: Upload OpenCV
+        uses: actions/upload-artifact@v3
+        with:
+          name: OpenCV
+          path: ${{ github.workspace }}\build\OpenCV.tar.gz
+
+      - name: Clone FastDeploy
+        run: |
+            cd ~
+            git clone https://github.com/PaddlePaddle/FastDeploy.git -b release/1.0.0 --depth=1
+
+      - name: Build FastDeploy
+        run: |
+            cd ~/FastDeploy
+            mkdir build && cd build
+            cmake \
+              -DENABLE_ORT_BACKEND=ON \
+              -DCMAKE_INSTALL_PREFIX=~/fastdeploy \
+              -DENABLE_VISION=ON \
+              -DOPENCV_DIRECTORY=~/opencv4/lib/cmake/opencv4/ \
+              ..
+            make -j$(nproc --all)
+            make install
+
+      - name: Patch FastDeploy
+        run: |
+            cd ~/fastdeploy
+            sed -i '/set(OPENCV_DIRECTORY/d' FastDeploy.cmake
+            patchelf --set-rpath \
+              '$ORIGIN:
+              $ORIGIN/../third_libs/install/onnxruntime/lib:
+              $ORIGIN/../third_libs/install/paddle2onnx/lib' \
+              lib/libfastdeploy.so
+
+      - name: Package FastDeploy
+        run: |
+            cd ~
+            tar -czvf build/FastDeploy.tar.gz fastdeploy
+
+
+      - name: Upload Libs
+        uses: actions/upload-artifact@v3
+        with:
+          name: Libraries
+          path: ~/build
+
